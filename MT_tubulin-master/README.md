@@ -1,28 +1,40 @@
 来自：https://github.com/vexing-shusher/microtubule-dynamics-simulation
 
 ---
+
 测试项目环境是否配置成功，通过一个简单的 try 文件
+
 ```
 cd ./try
 g++ ./try.cpp -o try.exe
 ./try.exe
 输出 Hello world!
 ```
+
 - 如果使用 CLion 的话，只需要点 Run 就好，会自动生成 `try.exe`
+
 ---
+
 ## 输入输出
+
 要求用户输入的 2 个参数：
+
 1. 迭代次数，即时间步，要观察微观在几个时间步内的变化
 2. 文件名，即观测内容的保存路径。建议后缀为 `csv`
+
 ### 文件解释
+
 初始微管位置文件是：`init_coord.csv`
 它的第一列是 Qij，i 的取值范围是 1到13（因为有 13 个原纤维），j 的取值范围是 1到 6（其中Q1,Q2,Q3：三维空间坐标表示x,y,z，Q4,Q5,Q6：三维空间中的旋转角度，欧拉角或四元数表示方向）
+
 ## 原理介绍
-微管是由 **`α-微管蛋白`和`β-微管蛋白`二聚体**组成的中空圆柱状细胞骨架，直径22-25nm，**管壁含13条原纤维**
+
+微管是由 **`α-微管蛋白`和 `β-微管蛋白`二聚体**组成的中空圆柱状细胞骨架，直径22-25nm，**管壁含13条原纤维**
 
 像一个玉米，有 13 纵列，每一个玉米粒是  **α/β-微管蛋白二聚体，它由”** α-微管蛋白"亚基 和 **”** β-微管蛋白"亚基 构成
 
 ### 微管的四个层面结构：
+
 - 微管
 - 原纤维（ 13 条）
 - 蛋白二聚体
@@ -30,6 +42,7 @@ g++ ./try.cpp -o try.exe
 - 原子。蛋白亚基是由成千上万个原子通过化学键构建而成的独立的三维结构单元。而原子是构成这些亚基，乃至一切物质的基本物理粒子。
 
 ### Microtubule properties  微管特性
+
 - Dynamic instability  动态不稳定性
 - Polarity of the ends 端极性
 - Ability to generate force 产生力的能力
@@ -66,8 +79,11 @@ _为4是很确定的事情吗，有没有可能为3 或者 5？_
 ![1759051428109](image/README/1759051428109.png)
 
 ## 实验1
+
 测试仿真系统中的微管在理想状态下的运行是否符合**爱因斯坦的布朗运动理论，即"斯托克斯–爱因斯坦关系式"[(the stokes-einstein relation)](https://www.dalalinstitute.com/wp-content/uploads/Books/A-Textbook-of-Physical-Chemistry-Volume-1/ATOPCV1-8-5-The-Stokes-Einstein-Relation.pdf)**
+
 ### 理论解释
+
 该理论从普遍的粒子运动中抽象中了 2 个系数
 ![img.png](image/README/img.png)
 其中：t 是观测时间间隔，即测量粒子位移所经过的实际物理时间。即仿真系统中的模拟步长
@@ -75,15 +91,22 @@ _为4是很确定的事情吗，有没有可能为3 或者 5？_
 ![img.png](image/README/img2.png)
 
 ### 实验方法
+
 - 让微管在理想状态下随机运动，并记录每一个蛋白亚基的位置变化
 - 计算系统中粒子的真实扩散系数
 - 与爱因斯坦测量出的理论值进行对比
 
 ### 实验结果
+
 - thr 是 theoretical（理论的） 的缩写
 - time 是每个模拟步长所代表的物理时间
 - Dtr 和 Dro 是真实计算出的仿真系统 **扩散系数**
-![img.png](image/README/img3.png)
+  ![img.png](image/README/img3.png)
 
-### 随机性
+## 实验2-3
+
+![1765951353622](image/README/1765951353622.png)
+
+## 随机性
+
 1. 初始坐标一定是随机的
