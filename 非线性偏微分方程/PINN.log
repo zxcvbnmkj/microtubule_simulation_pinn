@@ -1,0 +1,73 @@
+D:\2filerj\anaconda3\envs\torch\python.exe E:\PINN\非线性偏微分方程\plan1.py
+使用设备: cpu
+加载数据...
+开始加载微管坐标数据...
+使用简化方法解析: E:\gits\MT_tubulin-master\experimental_results\exp1\coord.csv
+找到 PF #1: 4 个坐标点
+找到 PF #2: 4 个坐标点
+找到 PF #3: 4 个坐标点
+找到 PF #4: 4 个坐标点
+找到 PF #5: 4 个坐标点
+找到 PF #6: 4 个坐标点
+找到 PF #7: 4 个坐标点
+找到 PF #8: 4 个坐标点
+找到 PF #9: 4 个坐标点
+找到 PF #10: 4 个坐标点
+找到 PF #11: 4 个坐标点
+找到 PF #12: 4 个坐标点
+找到 PF #13: 4 个坐标点
+使用简化方法解析: E:\gits\MT_tubulin-master\experimental_results\exp1\init_coord.csv
+找到 PF #1: 4 个坐标点
+找到 PF #2: 4 个坐标点
+找到 PF #3: 4 个坐标点
+找到 PF #4: 4 个坐标点
+找到 PF #5: 4 个坐标点
+找到 PF #6: 4 个坐标点
+找到 PF #7: 4 个坐标点
+找到 PF #8: 4 个坐标点
+找到 PF #9: 4 个坐标点
+找到 PF #10: 4 个坐标点
+找到 PF #11: 4 个坐标点
+找到 PF #12: 4 个坐标点
+找到 PF #13: 4 个坐标点
+成功解析: 初始数据 13 条原纤维, 演化数据 13 条原纤维
+PF #1 初始: 4 个亚基
+PF #1 演化: 4 个亚基
+PF #2 初始: 4 个亚基
+PF #2 演化: 4 个亚基
+PF #3 初始: 4 个亚基
+PF #3 演化: 4 个亚基
+PF #4 初始: 4 个亚基
+PF #4 演化: 4 个亚基
+PF #5 初始: 4 个亚基
+PF #5 演化: 4 个亚基
+PF #6 初始: 4 个亚基
+PF #6 演化: 4 个亚基
+PF #7 初始: 4 个亚基
+PF #7 演化: 4 个亚基
+PF #8 初始: 4 个亚基
+PF #8 演化: 4 个亚基
+PF #9 初始: 4 个亚基
+PF #9 演化: 4 个亚基
+PF #10 初始: 4 个亚基
+PF #10 演化: 4 个亚基
+PF #11 初始: 4 个亚基
+PF #11 演化: 4 个亚基
+PF #12 初始: 4 个亚基
+PF #12 演化: 4 个亚基
+PF #13 初始: 4 个亚基
+PF #13 演化: 4 个亚基
+合并后数据形状: (104, 6)
+标准化后数据形状: (104, 6)
+开始训练...
+Epoch [10/100], Train Loss: 1.0391, Val Loss: 1.3303
+Epoch [20/100], Train Loss: 1.0951, Val Loss: 1.2301
+Epoch [30/100], Train Loss: 1.0415, Val Loss: 1.1477
+Epoch [40/100], Train Loss: 1.0222, Val Loss: 1.1423
+Epoch [50/100], Train Loss: 1.0379, Val Loss: 1.1779
+Epoch [60/100], Train Loss: 1.0322, Val Loss: 1.1633
+Epoch [70/100], Train Loss: 1.0209, Val Loss: 1.1801
+Epoch [80/100], Train Loss: 1.0121, Val Loss: 1.1625
+Epoch [90/100], Train Loss: 1.0329, Val Loss: 1.1680
+Epoch [100/100], Train Loss: 1.0273, Val Loss: 1.1788
+训练完成！模型已保存。
