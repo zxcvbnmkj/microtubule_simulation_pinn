@@ -338,21 +338,14 @@ def generate_training_data(init_coords, n_steps=None, use_cpp_data=True, cpp_dat
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         cpp_data_path = os.path.join(base_dir, 'MT_tubulin-master', 'results_5k.csv')
     
-    print("从C++结果文件加载训练数据: {}".format(cpp_data_path))
-    
     if not os.path.exists(cpp_data_path):
         raise FileNotFoundError("找不到C++结果文件: {}".format(cpp_data_path))
     
-    # 读取CSV文件
     df = pd.read_csv(cpp_data_path)
-    
-    # 获取所有唯一的时间步
     unique_steps = sorted(df['step'].unique())
     
     if n_steps is not None:
         unique_steps = unique_steps[:n_steps+1]
-    
-    print("找到 {} 个时间步".format(len(unique_steps)))
     
     all_coords = []
     n_filaments = 13
@@ -364,9 +357,7 @@ def generate_training_data(init_coords, n_steps=None, use_cpp_data=True, cpp_dat
         # 获取该时间步的所有layer数据
         step_data = df[df['step'] == step].sort_values('layer')
         
-        # 检查是否有4个layer
         if len(step_data) != n_subunits:
-            print("警告: 时间步 {} 只有 {} 个layer，期望4个".format(step, len(step_data)))
             continue
         
         # 初始化该时间步的坐标数组 (13, 4, 6)
@@ -403,26 +394,150 @@ def generate_training_data(init_coords, n_steps=None, use_cpp_data=True, cpp_dat
     if len(all_coords) == 0:
         raise ValueError("未能从CSV文件中提取到有效数据")
     
-    # 堆叠所有时间步
     all_coords_tensor = torch.stack(all_coords)
-    
-    print("成功加载 {} 个时间步的数据".format(len(all_coords_tensor)))
-    print("数据形状: {}".format(all_coords_tensor.shape))
-    
     return all_coords_tensor
 
 
-# ==================== 训练函数 ====================
-def train_pinn(model, init_coords, n_epochs=1000, batch_size=32, lr=1e-3, lambda_physics=0.1):
+# ==================== 数据集划分 ====================
+def split_dataset(all_coords, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15):
     """
-    训练PINN模型
+    划分数据集为训练集、验证集和测试集
+    """
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "比例之和必须为1"
+    
+    n_samples = len(all_coords) - 1  # 减去1因为需要成对数据
+    n_train = int(n_samples * train_ratio)
+    n_val = int(n_samples * val_ratio)
+    n_test = n_samples - n_train - n_val
+    
+    # 按时间顺序划分（保持时间连续性）
+    train_indices = torch.arange(0, n_train)
+    val_indices = torch.arange(n_train, n_train + n_val)
+    test_indices = torch.arange(n_train + n_val, n_samples)
+    
+    return train_indices, val_indices, test_indices
+
+
+# ==================== 评价指标 ====================
+class EvaluationMetrics:
+    """评价指标计算"""
+    
+    def __init__(self, n_filaments=13, n_subunits=4):
+        self.n_filaments = n_filaments
+        self.n_subunits = n_subunits
+    
+    def compute_metrics(self, q_pred, q_true, q_current=None, physics_constraint=None):
+        """
+        计算评价指标
+        q_pred: 预测坐标 (batch_size, n_filaments, n_subunits, 6)
+        q_true: 真实坐标 (batch_size, n_filaments, n_subunits, 6)
+        q_current: 当前坐标（用于物理约束）
+        """
+        metrics = {}
+        
+        # 1. MSE (均方误差)
+        mse = torch.mean((q_pred - q_true) ** 2)
+        metrics['MSE'] = mse.item()
+        
+        # 2. MAE (平均绝对误差)
+        mae = torch.mean(torch.abs(q_pred - q_true))
+        metrics['MAE'] = mae.item()
+        
+        # 3. 位置误差（前3维）
+        pos_pred = q_pred[:, :, :, :3]
+        pos_true = q_true[:, :, :, :3]
+        pos_mse = torch.mean((pos_pred - pos_true) ** 2)
+        pos_mae = torch.mean(torch.abs(pos_pred - pos_true))
+        metrics['Position_MSE'] = pos_mse.item()
+        metrics['Position_MAE'] = pos_mae.item()
+        metrics['Position_RMSE'] = torch.sqrt(pos_mse).item()
+        
+        # 4. 角度误差（后3维）
+        angle_pred = q_pred[:, :, :, 3:]
+        angle_true = q_true[:, :, :, 3:]
+        angle_mse = torch.mean((angle_pred - angle_true) ** 2)
+        angle_mae = torch.mean(torch.abs(angle_pred - angle_true))
+        metrics['Angle_MSE'] = angle_mse.item()
+        metrics['Angle_MAE'] = angle_mae.item()
+        metrics['Angle_RMSE'] = torch.sqrt(angle_mse).item()
+        
+        # 5. 相对误差（百分比）
+        relative_error = torch.mean(torch.abs(q_pred - q_true) / (torch.abs(q_true) + 1e-10))
+        metrics['Relative_Error'] = relative_error.item() * 100  # 转换为百分比
+        
+        # 6. 物理约束误差（如果提供了physics_constraint）
+        if physics_constraint is not None and q_current is not None:
+            physics_residual = physics_constraint.compute_physics_residual(q_current, q_pred)
+            physics_error = torch.mean(physics_residual ** 2)
+            metrics['Physics_Constraint_Error'] = physics_error.item()
+        
+        # 7. R² 决定系数
+        ss_res = torch.sum((q_true - q_pred) ** 2)
+        ss_tot = torch.sum((q_true - torch.mean(q_true)) ** 2)
+        r2 = 1 - (ss_res / (ss_tot + 1e-10))
+        metrics['R2'] = r2.item()
+        
+        return metrics
+    
+    def print_metrics(self, metrics, prefix=""):
+        """打印评价指标"""
+        print("\n{}: MSE={:.6e}, R²={:.4f}, 位置RMSE={:.6e}m, 角度RMSE={:.6e}rad".format(
+            prefix, metrics['MSE'], metrics['R2'], 
+            metrics['Position_RMSE'], metrics['Angle_RMSE']))
+        if 'Physics_Constraint_Error' in metrics:
+            print("  物理约束误差: {:.6e}".format(metrics['Physics_Constraint_Error']))
+
+
+# ==================== 验证函数 ====================
+def evaluate(model, data_indices, all_coords, batch_size=32, physics_constraint=None):
+    """
+    在验证集或测试集上评估模型
+    """
+    model.eval()
+    metrics_calculator = EvaluationMetrics(model.n_filaments, model.n_subunits)
+    
+    all_preds = []
+    all_trues = []
+    all_currents = []
+    
+    with torch.no_grad():
+        for batch_start in range(0, len(data_indices), batch_size):
+            batch_indices = data_indices[batch_start:batch_start+batch_size]
+            
+            q_current_batch = all_coords[batch_indices]
+            q_next_true_batch = all_coords[batch_indices + 1]
+            
+            # 模型预测
+            q_next_pred_batch = model(q_current_batch)
+            
+            all_preds.append(q_next_pred_batch)
+            all_trues.append(q_next_true_batch)
+            all_currents.append(q_current_batch)
+    
+    # 合并所有批次
+    q_pred_all = torch.cat(all_preds, dim=0)
+    q_true_all = torch.cat(all_trues, dim=0)
+    q_current_all = torch.cat(all_currents, dim=0)
+    
+    # 计算指标
+    metrics = metrics_calculator.compute_metrics(
+        q_pred_all, q_true_all, q_current_all, physics_constraint
+    )
+    
+    return metrics, q_pred_all, q_true_all
+
+
+# ==================== 训练函数 ====================
+def train_pinn(model, init_coords, train_indices, val_indices, n_epochs=1000, 
+               batch_size=32, lr=1e-3, lambda_physics=0.1, save_best=True):
+    """
+    训练PINN模型，包含验证集评估和最佳模型保存
     """
     optimizer = optim.Adam(model.parameters(), lr=lr)
     physics_constraint = LangevinPhysicsConstraint(model.n_filaments, model.n_subunits)
     loss_fn = PINNLoss(physics_constraint, lambda_physics=lambda_physics)
     
-    # 从C++结果文件加载训练数据
-    print("加载训练数据...")
+    # 加载数据
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(os.path.dirname(current_dir))
     cpp_data_path = os.path.join(project_root, 'MT_tubulin-master', 'results_5k.csv')
@@ -433,37 +548,41 @@ def train_pinn(model, init_coords, n_epochs=1000, batch_size=32, lr=1e-3, lambda
     all_coords = generate_training_data(init_coords, n_steps=None, use_cpp_data=True, cpp_data_path=cpp_data_path)
     all_coords = all_coords.to(device)
     
-    losses = []
-    mse_losses = []
-    physics_losses = []
+    # 训练历史
+    train_losses = []
+    train_mse_losses = []
+    train_physics_losses = []
+    val_losses = []
+    val_metrics_history = []
+    
+    best_val_loss = float('inf')
+    best_epoch = 0
     
     for epoch in range(n_epochs):
+        # ========== 训练阶段 ==========
+        model.train()
         epoch_total_loss = 0.0
         epoch_mse_loss = 0.0
         epoch_physics_loss = 0.0
         n_batches = 0
         
-        # 随机打乱数据
-        indices = torch.randperm(len(all_coords) - 1)
+        # 随机打乱训练数据
+        train_shuffled = train_indices[torch.randperm(len(train_indices))]
         
-        for batch_start in range(0, len(indices), batch_size):
-            batch_indices = indices[batch_start:batch_start+batch_size]
+        for batch_start in range(0, len(train_shuffled), batch_size):
+            batch_indices = train_shuffled[batch_start:batch_start+batch_size]
             
-            # 准备批次数据
             q_current_batch = all_coords[batch_indices]
             q_next_true_batch = all_coords[batch_indices + 1]
             
             optimizer.zero_grad()
             
-            # 模型预测
             q_next_pred_batch = model(q_current_batch)
             
-            # 计算损失
             total_loss, mse_loss_val, physics_loss_val = loss_fn(
                 q_next_pred_batch, q_next_true_batch, q_current_batch
             )
             
-            # 反向传播
             total_loss.backward()
             optimizer.step()
             
@@ -472,19 +591,50 @@ def train_pinn(model, init_coords, n_epochs=1000, batch_size=32, lr=1e-3, lambda
             epoch_physics_loss += physics_loss_val.item()
             n_batches += 1
         
-        avg_total_loss = epoch_total_loss / n_batches
-        avg_mse_loss = epoch_mse_loss / n_batches
-        avg_physics_loss = epoch_physics_loss / n_batches
+        avg_train_loss = epoch_total_loss / n_batches
+        avg_train_mse = epoch_mse_loss / n_batches
+        avg_train_physics = epoch_physics_loss / n_batches
         
-        losses.append(avg_total_loss)
-        mse_losses.append(avg_mse_loss)
-        physics_losses.append(avg_physics_loss)
+        train_losses.append(avg_train_loss)
+        train_mse_losses.append(avg_train_mse)
+        train_physics_losses.append(avg_train_physics)
+        
+        # ========== 验证阶段 ==========
+        if len(val_indices) > 0:
+            val_metrics, _, _ = evaluate(model, val_indices, all_coords, batch_size, physics_constraint)
+            val_loss = val_metrics['MSE']  # 使用MSE作为验证损失
+            val_losses.append(val_loss)
+            val_metrics_history.append(val_metrics)
+            
+            # 保存最佳模型
+            if save_best and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_epoch = epoch
+                best_model_path = "microtubule_pinn_v2_best_model.pt"
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'val_loss': val_loss,
+                    'val_metrics': val_metrics
+                }, best_model_path)
         
         if (epoch + 1) % 100 == 0:
-            print("Epoch {}/{}, Total Loss: {:.6e}, MSE Loss: {:.6e}, Physics Loss: {:.6e}".format(
-                epoch+1, n_epochs, avg_total_loss, avg_mse_loss, avg_physics_loss))
+            if len(val_indices) > 0:
+                print("Epoch {}/{}, Train Loss: {:.6e}, Val MSE: {:.6e}, Val R²: {:.4f}".format(
+                    epoch+1, n_epochs, avg_train_loss, val_loss, val_metrics['R2']))
+            else:
+                print("Epoch {}/{}, Train Loss: {:.6e}".format(epoch+1, n_epochs, avg_train_loss))
     
-    return losses, mse_losses, physics_losses
+    return {
+        'train_losses': train_losses,
+        'train_mse_losses': train_mse_losses,
+        'train_physics_losses': train_physics_losses,
+        'val_losses': val_losses,
+        'val_metrics_history': val_metrics_history,
+        'best_epoch': best_epoch,
+        'best_val_loss': best_val_loss
+    }
 
 
 # ==================== 仿真函数 ====================
@@ -545,7 +695,7 @@ def save_results(results, filename="results_pinn_v2.csv"):
                             f.write("{},".format(results[step, i, layer, k]))
                 f.write('\n')
     
-    print("结果已保存到 {}".format(filename))
+    # 文件已保存
 
 
 # ==================== 主函数 ====================
@@ -554,85 +704,111 @@ if __name__ == "__main__":
     n_filaments = 13
     n_subunits = 4
     
-    print("=" * 60)
-    print("微管动力学PINN仿真系统 V2")
-    print("输入: q(t) -> 输出: q(t+1)")
-    print("=" * 60)
-    
-    # 1. 初始化微管结构
-    print("\n1. 初始化微管结构...")
+    # 1. 初始化
     init_coords = initialize_microtubule(n_filaments, n_subunits)
-    print("   微管结构: {}条原纤维 × {}个亚基".format(n_filaments, n_subunits))
     
-    # 2. 创建图神经网络模型
-    print("\n2. 创建图神经网络模型...")
+    # 2. 创建模型
     model = MicrotubuleDynamicsModel(
-        n_filaments=n_filaments,
-        n_subunits=n_subunits,
-        hidden_size=128,
-        num_layers=3
+        n_filaments=n_filaments, n_subunits=n_subunits,
+        hidden_size=128, num_layers=3
     ).to(device)
-    print("   图结构: {}个节点, {}条边".format(
-        model.num_nodes, 
-        model.edge_index.shape[1]
-    ))
-    print("   模型参数数量: {}".format(sum(p.numel() for p in model.parameters())))
+    print("模型: {}节点, {}边, {}参数".format(
+        model.num_nodes, model.edge_index.shape[1], 
+        sum(p.numel() for p in model.parameters())))
     
-    # 3. 训练模型
-    print("\n3. 训练PINN模型...")
-    print("   损失函数组成:")
-    print("   - MSE损失（数据拟合）")
-    print("   - 物理损失（Langevin方程约束）")
-    print("   - 总损失 = MSE损失 + λ × 物理损失")
-    print("   这可能需要一些时间...")
+    # 3. 加载数据
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    cpp_data_path = os.path.join(project_root, 'MT_tubulin-master', 'results_5k.csv')
+    if not os.path.exists(cpp_data_path):
+        cpp_data_path = os.path.join('..', '..', 'MT_tubulin-master', 'results_5k.csv')
     
-    lambda_physics = 0.1  # 物理损失权重
-    losses, mse_losses, physics_losses = train_pinn(
-        model, init_coords, 
-        n_epochs=2000, 
-        batch_size=32, 
-        lr=1e-3,
-        lambda_physics=lambda_physics
+    all_coords = generate_training_data(init_coords, n_steps=None, use_cpp_data=True, cpp_data_path=cpp_data_path)
+    all_coords = all_coords.to(device)
+    
+    # 4. 划分数据集
+    train_indices, val_indices, test_indices = split_dataset(
+        all_coords, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15
+    )
+    print("数据集: 训练{} / 验证{} / 测试{}".format(len(train_indices), len(val_indices), len(test_indices)))
+    
+    # 5. 训练
+    print("\n开始训练...")
+    training_history = train_pinn(
+        model, init_coords, train_indices, val_indices,
+        n_epochs=2000, batch_size=32, lr=1e-3,
+        lambda_physics=0.1, save_best=True
     )
     
-    # 4. 保存模型
-    print("\n4. 保存模型...")
-    model_path = "microtubule_pinn_v2_model.pt"
-    torch.save(model.state_dict(), model_path)
-    print("   模型已保存到 {}".format(model_path))
+    # 6. 测试集评估
+    best_model_path = "microtubule_pinn_v2_best_model.pt"
+    checkpoint = torch.load(best_model_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    print("\n最佳模型: Epoch {}, Val MSE: {:.6e}".format(
+        checkpoint['epoch'] + 1, checkpoint['val_loss']))
     
-    # 5. 运行仿真
-    print("\n5. 运行仿真...")
-    n_steps = int(input("请输入时间步数: "))
-    results = simulate_microtubule(model, init_coords, n_steps=n_steps)
+    physics_constraint = LangevinPhysicsConstraint(n_filaments, n_subunits)
+    test_metrics, _, _ = evaluate(
+        model, test_indices, all_coords, batch_size=32, physics_constraint=physics_constraint
+    )
     
-    # 6. 保存结果
-    print("\n6. 保存结果...")
-    save_results(results, "results_pinn_v2.csv")
+    EvaluationMetrics(n_filaments, n_subunits).print_metrics(test_metrics, "测试集")
     
-    # 7. 可视化训练损失
-    print("\n7. 可视化训练损失...")
-    plt.figure(figsize=(12, 5))
+    # 7. 保存模型
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'test_metrics': test_metrics,
+        'best_epoch': checkpoint['epoch'],
+        'best_val_loss': checkpoint['val_loss']
+    }, "microtubule_pinn_v2_final_model.pt")
     
-    plt.subplot(1, 2, 1)
-    plt.plot(losses, label='Total Loss')
-    plt.plot(mse_losses, label='MSE Loss')
-    plt.plot(physics_losses, label='Physics Loss')
+    # 8. 可选仿真
+    run_simulation = input("\n是否运行仿真？(y/n): ").lower().strip()
+    if run_simulation == 'y':
+        n_steps = int(input("请输入时间步数: "))
+        results = simulate_microtubule(model, init_coords, n_steps=n_steps)
+        save_results(results, "results_pinn_v2.csv")
+    
+    # 9. 可视化
+    plt.figure(figsize=(15, 5))
+    
+    plt.subplot(1, 3, 1)
+    plt.plot(training_history['train_losses'], label='Train Total Loss', alpha=0.7)
+    plt.plot(training_history['train_mse_losses'], label='Train MSE Loss', alpha=0.7)
+    plt.plot(training_history['train_physics_losses'], label='Train Physics Loss', alpha=0.7)
+    if len(training_history['val_losses']) > 0:
+        plt.plot(training_history['val_losses'], label='Val MSE Loss', linewidth=2)
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Training Losses')
+    plt.title('Training and Validation Losses')
     plt.yscale('log')
     plt.legend()
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     
-    plt.subplot(1, 2, 2)
-    plt.plot(losses, label='Total Loss')
+    plt.subplot(1, 3, 2)
+    if len(training_history['val_metrics_history']) > 0:
+        val_r2 = [m['R2'] for m in training_history['val_metrics_history']]
+        plt.plot(val_r2, label='Validation R²', color='green', linewidth=2)
+        plt.axvline(x=training_history['best_epoch'], color='red', linestyle='--', 
+                   label='Best Model (Epoch {})'.format(training_history['best_epoch'] + 1))
     plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Total Loss')
-    plt.yscale('log')
-    plt.grid(True)
+    plt.ylabel('R² Score')
+    plt.title('Validation R² Score')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(1, 3, 3)
+    if len(training_history['val_metrics_history']) > 0:
+        val_physics = [m.get('Physics_Constraint_Error', 0) for m in training_history['val_metrics_history']]
+        if max(val_physics) > 0:
+            plt.plot(val_physics, label='Physics Constraint Error', color='orange', linewidth=2)
+            plt.xlabel('Epoch')
+            plt.ylabel('Physics Error')
+            plt.title('Physics Constraint Error')
+            plt.yscale('log')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('pinn_v2_training_loss.png', dpi=150)
-    print("仿真完成！")
+    plt.savefig('pinn_v2_training_curves.png', dpi=150)
+    print("\n完成！")
